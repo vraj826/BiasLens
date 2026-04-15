@@ -447,13 +447,10 @@ async def list_metrics():
 @app.exception_handler(404)
 async def not_found(req, exc):
     return JSONResponse(status_code=404, content={"error": "Not found"})
+import os
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"""
-+------------------------------------------+
-|  BIASLENS API  v{settings.VERSION}               |
-|  Running: http://127.0.0.1:8000          |
-+------------------------------------------+
-    """)
-   uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    # These two lines MUST be indented 4 spaces
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
