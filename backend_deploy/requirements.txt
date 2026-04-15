@@ -7,3 +7,4 @@ numpy
 matplotlib
 python-jose[cryptography]
 passlib[bcrypt]
+python-multipart
