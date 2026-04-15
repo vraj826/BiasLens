@@ -243,7 +243,7 @@ footer{position:relative;z-index:2;border-top:1px solid var(--border);padding:cl
 </footer>
 <div class="toast" id="toast"></div>
 <script>
-const API='http://127.0.0.1:8000';
+const API='https://biaslens-qvew.onrender.com';
 window.addEventListener('scroll',()=>{document.getElementById('sp').style.width=Math.min(scrollY/(document.body.scrollHeight-innerHeight)*100,100)+'%';},{passive:true});
 const ro=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in');});},{threshold:.07});
 document.querySelectorAll('.reveal').forEach(el=>ro.observe(el));
