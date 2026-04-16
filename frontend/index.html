@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#020208"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>BiasLens — AI Fairness Auditor</title>
-<link rel="icon" type="image/x-icon" href="pic.ico?v=2" />
+<link rel="icon" type="image/x-icon" href="pic.ico" />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
@@ -238,15 +238,18 @@ footer{position:relative;z-index:2;border-top:1px solid var(--border);padding:cl
 </section>
 <footer>
   <div style="display:flex;align-items:center;gap:9px;"><div class="logo-icon" style="width:26px;height:26px;font-size:11px;border-radius:7px;">B</div><span style="font-family:'Orbitron',monospace;color:var(--text);font-weight:700;letter-spacing:2px;font-size:13px;">BIASLENS</span></div>
-  <span>Google Prompt Wars 2026 · Team Binary Bandits</span>
+  <span>Google Prompt Wars 2026 · Team BiasLens</span>
   <div class="fl"><a href="#">docs</a><a href="dashboard.html">dashboard</a></div>
 </footer>
 <div class="toast" id="toast"></div>
-<script>
+<script type="module">
+import { auth, storage, ref, uploadBytes, onAuthStateChanged, signOut } from './firebase-config.js';
+
 const API='https://biaslens-qvew.onrender.com';
 window.addEventListener('scroll',()=>{document.getElementById('sp').style.width=Math.min(scrollY/(document.body.scrollHeight-innerHeight)*100,100)+'%';},{passive:true});
 const ro=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in');});},{threshold:.07});
 document.querySelectorAll('.reveal').forEach(el=>ro.observe(el));
+
 async function checkApi(){
   const dot=document.getElementById('apiDot'),lbl=document.getElementById('apiLbl');
   try{
@@ -259,15 +262,17 @@ async function checkApi(){
   }
 }
 checkApi(); window.apiInterval = setInterval(checkApi,20000);
-function showToast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast on'+(err?' err':'');clearTimeout(t._to);t._to=setTimeout(()=>t.classList.remove('on'),5000);}
 
-function goto(url){window.location.href=url;}
-function triggerUpload(){document.getElementById('fi').click();}
+window.showToast = function(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast on'+(err?' err':'');clearTimeout(t._to);t._to=setTimeout(()=>t.classList.remove('on'),5000);}
+
+window.goto = function(url){window.location.href=url;}
+window.triggerUpload = function(){document.getElementById('fi').click();}
 const STEPS=['st1','st2','st3','st4','st5'];
 function setStep(i){STEPS.forEach((id,idx)=>{document.getElementById(id).className='step-item'+(idx<i?' done':idx===i?' active':'');});}
 let _pendingFile=null;
-function handleFile(inp){if(inp.files&&inp.files[0])prepareAudit(inp.files[0]);}
-function handleDrop(e){e.preventDefault();document.getElementById('dz').classList.remove('drag');if(e.dataTransfer.files[0])prepareAudit(e.dataTransfer.files[0]);}
+window.handleFile = function(inp){if(inp.files&&inp.files[0])prepareAudit(inp.files[0]);}
+window.handleDrop = function(e){e.preventDefault();document.getElementById('dz').classList.remove('drag');if(e.dataTransfer.files[0])prepareAudit(e.dataTransfer.files[0]);}
+
 async function prepareAudit(file){
   _pendingFile=file;
   try{
@@ -276,7 +281,7 @@ async function prepareAudit(file){
     if(!r.ok)throw new Error();
     const d=await r.json();
     if(d.detected_label&&d.detected_sensitive.length>0)
-    {runAudit(file,d.detected_label,d.detected_sensitive.join(','));}
+    {window.runAudit(file,d.detected_label,d.detected_sensitive.join(','));}
     else{
       const lSel=document.getElementById('labelSel'),sSel=document.getElementById('sensSel');
       lSel.innerHTML=d.columns.map(c=>`<option value="${c}"${c===d.detected_label?' selected':''}>${c}</option>`).join('');
@@ -284,17 +289,19 @@ async function prepareAudit(file){
       document.getElementById('colPicker').style.display='block';
       document.getElementById('colPicker').scrollIntoView({behavior:'smooth',block:'center'});
     }
-  }catch{runAudit(file,null,null);}
+  }catch{window.runAudit(file,null,null);}
 }
-function runWithConfig(){
+
+window.runWithConfig = function(){
   const label=document.getElementById('labelSel').value;
   const sens=[...document.getElementById('sensSel').selectedOptions].map(o=>o.value);
-  if(!label){showToast('Select a label column',true);return;}
-  if(!sens.length){showToast('Select at least one sensitive attribute',true);return;}
+  if(!label){window.showToast('Select a label column',true);return;}
+  if(!sens.length){window.showToast('Select at least one sensitive attribute',true);return;}
   document.getElementById('colPicker').style.display='none';
-  runAudit(_pendingFile,label,sens.join(','));
+  window.runAudit(_pendingFile,label,sens.join(','));
 }
-async function runAudit(file,labelCol,sensitiveAttrs){
+
+window.runAudit = async function(file,labelCol,sensitiveAttrs){
   document.getElementById('dz').style.display='none';
   document.getElementById('colPicker').style.display='none';
   document.getElementById('upState').style.display='block';
@@ -302,6 +309,19 @@ async function runAudit(file,labelCol,sensitiveAttrs){
   document.getElementById('upMain').textContent='Uploading dataset...';
   document.getElementById('upSub').textContent=file.name;
   setStep(0);
+
+  // FIREBASE STORAGE INTEGRATION
+  const currentUser = auth.currentUser;
+  if(currentUser) {
+    try {
+      const storageRef = ref(storage, `users/${currentUser.uid}/uploads/${Date.now()}_${file.name}`);
+      await uploadBytes(storageRef, file);
+      console.log('Dataset securely saved to Firebase Storage.');
+    } catch(err) {
+      console.warn('Firebase Storage upload failed:', err);
+    }
+  }
+
   const timings=[0,900,2200,3800,5500];
   timings.forEach((d,i)=>setTimeout(()=>setStep(i),d));
   document.getElementById('upMain').textContent='Analysing for bias...';
@@ -319,16 +339,17 @@ async function runAudit(file,labelCol,sensitiveAttrs){
     document.getElementById('upMain').textContent='Audit complete!';
     document.getElementById('upSub').textContent=`Score ${data.summary.overall_score}/100 · Grade ${data.summary.fairness_grade} · ${data.summary.total_issues} issues`;
     sessionStorage.setItem('auditResult',JSON.stringify(data));
-    showToast(`✓ Score: ${data.summary.overall_score}/100 (${data.summary.fairness_grade})`);
-    setTimeout(()=>goto('dashboard.html'),1100);
+    window.showToast(`✓ Score: ${data.summary.overall_score}/100 (${data.summary.fairness_grade})`);
+    setTimeout(()=>window.goto('dashboard.html'),1100);
   }catch(err){
     document.getElementById('dz').style.display='block';
     document.getElementById('upState').style.display='none';
     document.getElementById('fi').value='';
     STEPS.forEach(id=>document.getElementById(id).className='step-item');
-    showToast('Error: '+err.message,true);
+    window.showToast('Error: '+err.message,true);
   }
 }
+
 const feats=[{n:'01',ico:'🔍',bg:'rgba(0,245,255,0.07)',t:'Statistical Parity',d:'Detects when demographic groups receive different outcome rates regardless of qualifications.'},
 {n:'02',ico:'⚖️',bg:'rgba(255,0,128,0.07)',t:'Disparate Impact',d:"Flags violations of the legal 80% rule — computed directly from your uploaded data."},
 {n:'03',ico:'🎯',bg:'rgba(251,191,36,0.07)',t:'Equal Opportunity',d:'Ensures true positive rates are equal across groups — all values from your real dataset.'},
@@ -343,38 +364,27 @@ const procs=[{n:'01',t:'Upload Dataset',d:'Drop CSV, JSON, XLSX or Parquet. Auto
 document.getElementById('psteps').innerHTML=procs.map(p=>`<div class="ps"><div class="ps-n">${p.n}</div><h4>${p.t}</h4><p>${p.d}</p></div>`).join('');
 
 // ── Auth-aware nav ─────────────────────────────────────────────
-(function checkLoginState(){
-  const token = localStorage.getItem('biaslens_token');
-  if(!token) return;
+onAuthStateChanged(auth, user => {
   const area = document.getElementById('navAuthArea');
   if(!area) return;
-  // Try to decode user info
-  let email = 'User';
-  try {
-    if(token.startsWith('demo.')){
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      email = payload.sub || 'User';
-    } else {
-      // JWT: decode middle part
-      const parts = token.split('.');
-      if(parts.length === 3){
-        const payload = JSON.parse(atob(parts[1]));
-        email = payload.sub || 'User';
-      }
-    }
-  } catch(e){}
-  const initial = email.charAt(0).toUpperCase();
-  const shortName = email.split('@')[0];
-  area.innerHTML = `<div class="nav-user" onclick="handleLogout()" title="Click to logout">
-    <div class="nav-user-avatar">${initial}</div>
-    <span class="nav-user-name">${shortName}</span>
-  </div>`;
-})();
+  if(user) {
+    const email = user.email || 'User';
+    const initial = email.charAt(0).toUpperCase();
+    const shortName = email.split('@')[0];
+    area.innerHTML = \`<div class="nav-user" onclick="handleLogout()" title="Click to logout">
+      <div class="nav-user-avatar">\${initial}</div>
+      <span class="nav-user-name">\${shortName}</span>
+    </div>\`;
+  } else {
+    area.innerHTML = \`<button class="btn-o" id="btnAuth" onclick="goto('auth.html')">login</button>\`;
+  }
+});
 
-function handleLogout(){
+window.handleLogout = async function(){
   if(confirm('Log out of BiasLens?')){
+    await signOut(auth);
     localStorage.removeItem('biaslens_token');
-    location.reload();
+    window.location.reload();
   }
 }
 </script>

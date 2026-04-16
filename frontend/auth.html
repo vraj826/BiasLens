@@ -181,140 +181,79 @@ input::placeholder{color:var(--dim);}
 <div class="toast" id="toast"></div>
 
 <!-- NO THREE.js loaded = faster page load -->
-<script>
-  const API = 'https://biaslens-qvew.onrender.com';
-  let mode = 'login';
-  let _selectedOAuthAccount = null;
-  let _oauthProvider = '';
+<script type="module">
+  import { 
+    auth, db, googleProvider, twitterProvider, githubProvider,
+    signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+    doc, setDoc, onAuthStateChanged
+  } from './firebase-config.js';
 
-  // ── OAuth Account Data (Simulates browser-stored accounts) ──────
-  const MOCK_ACCOUNTS = {
-    Google: [
-      { name: 'Personal Account', email: 'user@gmail.com', avatar: 'U' },
-      { name: 'Work Account', email: 'user@company.com', avatar: 'W' },
-    ],
-    Twitter: [
-      { name: '@user_handle', email: 'user@twitter.com', avatar: '𝕏' },
-    ],
-    GitHub: [
-      { name: 'dev-user', email: 'dev@github.com', avatar: '⌂' },
-    ]
+  let mode = 'login';
+  
+  // Make functions available globally since we are using inline onclick attributes
+  window.toggleMode = function() {
+    mode = mode === 'login' ? 'signup' : 'login';
+    document.getElementById('title').textContent = mode === 'login' ? 'Welcome Back' : 'Create Account';
+    document.getElementById('subTitle').textContent = mode === 'login'
+      ? 'Sign in to access your audit dashboard'
+      : 'Join BiasLens to save and export audits';
+    document.getElementById('btnMain').textContent = mode === 'login' ? 'SIGN_IN()' : 'CREATE_ACCOUNT()';
+    document.getElementById('toggleText').innerHTML = mode === 'login'
+      ? "Don't have an account? <span onclick='toggleMode()'>Sign up</span>"
+      : "Already have an account? <span onclick='toggleMode()'>Sign in</span>";
   };
 
-  // Load any previously used accounts from localStorage
-  function getStoredAccounts(provider) {
-    try {
-      const stored = localStorage.getItem(`biaslens_oauth_${provider.toLowerCase()}`);
-      if (stored) return JSON.parse(stored);
-    } catch(e) {}
-    return MOCK_ACCOUNTS[provider] || [];
-  }
+  window.showToast = function(msg, err=false) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast on' + (err ? ' err' : '');
+    clearTimeout(t._to);
+    t._to = setTimeout(() => t.classList.remove('on'), 4000);
+  };
 
-  function storeAccount(provider, account) {
-    const accounts = getStoredAccounts(provider);
-    if (!accounts.find(a => a.email === account.email)) {
-      accounts.push(account);
-      localStorage.setItem(`biaslens_oauth_${provider.toLowerCase()}`, JSON.stringify(accounts));
-    }
-  }
-
-  // ── Open OAuth Account Selection Popup ────────────────────────
-  function openOAuthPopup(provider) {
-    _oauthProvider = provider;
-    _selectedOAuthAccount = null;
-    const accounts = getStoredAccounts(provider);
-    const container = document.getElementById('oauthAccounts');
-    
-    document.getElementById('oauthTitle').textContent = `Sign in with ${provider}`;
-    document.getElementById('oauthSub').textContent = `Choose a ${provider} account to continue`;
-    
-    container.innerHTML = accounts.map((a, i) => `
-      <div class="oauth-acct${i===0?' selected':''}" onclick="selectOAuthAccount(${i}, this)" data-idx="${i}">
-        <div class="acct-avatar">${a.avatar || a.name.charAt(0).toUpperCase()}</div>
-        <div class="acct-info">
-          <div class="acct-name">${a.name}</div>
-          <div class="acct-email">${a.email}</div>
-        </div>
-      </div>
-    `).join('');
-
-    if (accounts.length > 0) _selectedOAuthAccount = accounts[0];
-    document.getElementById('oauthOverlay').classList.add('on');
-  }
-
-  function selectOAuthAccount(idx, el) {
-    const accounts = getStoredAccounts(_oauthProvider);
-    _selectedOAuthAccount = accounts[idx];
-    document.querySelectorAll('.oauth-acct').forEach(a => a.classList.remove('selected'));
-    el.classList.add('selected');
-  }
-
-  function useCustomAccount() {
-    closeOAuthPopup();
-    // Focus on email field for manual entry
-    document.getElementById('email').focus();
-    showToast(`Enter your ${_oauthProvider} email below`);
-  }
-
-  function closeOAuthPopup() {
-    document.getElementById('oauthOverlay').classList.remove('on');
-    _selectedOAuthAccount = null;
-  }
-
-  async function confirmOAuth() {
-    if (!_selectedOAuthAccount) {
-      showToast('Select an account first', true);
-      return;
-    }
-    
-    // Save reference before closing popup
-    const account = _selectedOAuthAccount;
-    const provider = _oauthProvider;
-    document.getElementById('oauthOverlay').classList.remove('on');
-    
-    const btn = document.getElementById('btn' + provider.replace('GitHub','Github'));
+  window.openOAuthPopup = async function(providerName) {
+    const btn = document.getElementById('btn' + providerName.replace('GitHub','Github'));
     if (btn) btn.classList.add('loading');
     
-    showToast(`Authenticating with ${provider}...`);
+    window.showToast(`Authenticating with ${providerName}...`);
+
+    let provider;
+    if (providerName === 'Google') provider = googleProvider;
+    else if (providerName === 'Twitter') provider = twitterProvider;
+    else if (providerName === 'GitHub') provider = githubProvider;
 
     try {
-      // Try real backend OAuth
-      const fd = new FormData();
-      fd.append('provider', provider);
-      fd.append('email', account.email);
-      fd.append('name', account.name);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const r = await fetch(`${API}/api/auth/social`, {
-        method: 'POST', body: fd, signal: controller.signal
-      });
-      clearTimeout(timeout);
-      if (r.ok) {
-        const d = await r.json();
-        localStorage.setItem('biaslens_token', d.access_token);
-        storeAccount(provider, account);
-        showSuccess(provider, account.email);
-        return;
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+      
+      // Create or update user profile in Firestore
+      try {
+        await setDoc(doc(db, 'users', user.uid), {
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          lastLogin: new Date()
+        }, { merge: true });
+      } catch (dbErr) {
+        console.warn('Failed to write to Firestore (ensure rules allow write)', dbErr);
       }
-      throw new Error('Backend error');
-    } catch(e) {
-      console.log('Social auth fallback:', e.message);
-      // Fallback: client-side demo token
-      const payload = {
-        sub: account.email,
-        name: account.name,
-        role: 'user',
-        provider: provider,
-        exp: Date.now() + 86400000
-      };
-      const token = `demo.${btoa(JSON.stringify(payload))}.sig`;
-      localStorage.setItem('biaslens_token', token);
-      storeAccount(provider, account);
-      showSuccess(provider, account.email);
+
+      showSuccess(providerName, user.email || 'Connected');
+    } catch (e) {
+      console.error(e);
+      window.showToast(e.message, true);
     } finally {
       if (btn) btn.classList.remove('loading');
     }
-  }
+  };
+
+  // Close placeholder popup if invoked from elsewhere
+  window.closeOAuthPopup = function() {
+    document.getElementById('oauthOverlay').classList.remove('on');
+  };
+  window.useCustomAccount = function() {
+    window.closeOAuthPopup();
+    document.getElementById('email').focus();
+  };
 
   function showSuccess(provider, email) {
     const card = document.getElementById('authCard');
@@ -326,41 +265,21 @@ input::placeholder{color:var(--dim);}
         </div>
         <h2 style="margin-bottom:8px;">Welcome!</h2>
         <p class="sub" style="margin-bottom:6px;">${provider} · ${email}</p>
-        <p style="font-size:10px;color:var(--dim);font-family:'JetBrains Mono',monospace;margin-bottom:20px;">Session encrypted · Token expires in 24h</p>
+        <p style="font-size:10px;color:var(--dim);font-family:'JetBrains Mono',monospace;margin-bottom:20px;">Secured by Firebase</p>
         <button class="btn-primary" onclick="window.location.href='dashboard.html'" style="max-width:280px;margin:0 auto;">
           OPEN_DASHBOARD() →
         </button>
       </div>
     `;
-    showToast(`✓ Authenticated with ${provider}`);
-    setTimeout(() => window.location.href = 'dashboard.html', 2200);
+    window.showToast(`✓ Authenticated securely`);
+    setTimeout(() => window.location.href = 'dashboard.html', 1500);
   }
 
-  // ── Email Login ──────────────────────────────────────────────
-  function toggleMode() {
-    mode = mode === 'login' ? 'signup' : 'login';
-    document.getElementById('title').textContent = mode === 'login' ? 'Welcome Back' : 'Create Account';
-    document.getElementById('subTitle').textContent = mode === 'login'
-      ? 'Sign in to access your audit dashboard'
-      : 'Join BiasLens to save and export audits';
-    document.getElementById('btnMain').textContent = mode === 'login' ? 'SIGN_IN()' : 'CREATE_ACCOUNT()';
-    document.getElementById('toggleText').innerHTML = mode === 'login'
-      ? "Don't have an account? <span onclick='toggleMode()'>Sign up</span>"
-      : "Already have an account? <span onclick='toggleMode()'>Sign in</span>";
-  }
-
-  function showToast(msg, err=false) {
-    const t = document.getElementById('toast');
-    t.textContent = msg; t.className = 'toast on' + (err ? ' err' : '');
-    clearTimeout(t._to);
-    t._to = setTimeout(() => t.classList.remove('on'), 4000);
-  }
-
-  async function handleSubmit() {
+  window.handleSubmit = async function() {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
-    if (!email || !password) { showToast('Please fill all fields', true); return; }
-    if (password.length < 6) { showToast('Password must be 6+ characters', true); return; }
+    if (!email || !password) { window.showToast('Please fill all fields', true); return; }
+    if (password.length < 6) { window.showToast('Password must be 6+ characters', true); return; }
     
     const btn = document.getElementById('btnMain');
     btn.classList.add('loading');
@@ -368,54 +287,44 @@ input::placeholder{color:var(--dim);}
 
     try {
       if (mode === 'signup') {
-        const fd = new FormData(); fd.append('email', email); fd.append('password', password);
-        const r = await fetch(`${API}/api/auth/register`, {method:'POST', body:fd, signal:AbortSignal.timeout(5000)});
-        if (r.ok) {
-          showToast('✓ Account created! Switching to login...');
-          setTimeout(() => { toggleMode(); btn.classList.remove('loading'); }, 1500);
-          return;
-        }
-        const d = await r.json().catch(() => ({detail:'Registration failed'}));
-        throw new Error(d.detail);
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        const user = cred.user;
+        
+        await setDoc(doc(db, 'users', user.uid), {
+          email: user.email,
+          createdAt: new Date(),
+          role: 'user'
+        });
+
+        window.showToast('✓ Account created! Redirecting...');
+        setTimeout(() => window.location.href = 'dashboard.html', 1000);
       } else {
-        const fd = new FormData(); fd.append('username', email); fd.append('password', password);
-        const r = await fetch(`${API}/api/auth/login`, {method:'POST', body:fd, signal:AbortSignal.timeout(5000)});
-        if (r.ok) {
-          const d = await r.json();
-          localStorage.setItem('biaslens_token', d.access_token);
-          showToast('✓ Login successful!');
-          setTimeout(() => window.location.href = 'dashboard.html', 800);
-          return;
-        }
-        throw new Error('Invalid email or password');
+        await signInWithEmailAndPassword(auth, email, password);
+        window.showToast('✓ Login successful!');
+        setTimeout(() => window.location.href = 'dashboard.html', 800);
       }
     } catch(e) {
-      if (e.name === 'AbortError' || e.name === 'TimeoutError' || e.message.includes('fetch') || e.message.includes('Failed')) {
-        const token = `demo.${btoa(JSON.stringify({sub:email, role:'user', exp:Date.now()+86400000}))}.sig`;
-        localStorage.setItem('biaslens_token', token);
-        showToast('✓ Signed in (offline mode)');
-        setTimeout(() => window.location.href = 'dashboard.html', 800);
-        return;
-      }
-      showToast(e.message, true);
+      console.error(e);
+      window.showToast(e.message, true);
     } finally {
       btn.classList.remove('loading');
       btn.textContent = mode === 'login' ? 'SIGN_IN()' : 'CREATE_ACCOUNT()';
     }
-  }
+  };
 
-  // Enter key
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (document.activeElement.id === 'email' || document.activeElement.id === 'password')) {
-      handleSubmit();
+      window.handleSubmit();
     }
   });
 
-  // Already logged in?
-  if (localStorage.getItem('biaslens_token')) {
-    showToast('Already authenticated. Redirecting...');
-    setTimeout(() => window.location.href = 'dashboard.html', 1000);
-  }
+  onAuthStateChanged(auth, user => {
+    // We set a flag to avoid flashing content if they load the page logged in
+    if (user && document.visibilityState === 'visible') {
+      window.showToast('Already authenticated. Redirecting...');
+      setTimeout(() => window.location.href = 'dashboard.html', 800);
+    }
+  });
 </script>
 </body>
 </html>

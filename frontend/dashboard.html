@@ -721,56 +721,20 @@ function buildDataset(d){
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 const API = 'https://biaslens-qvew.onrender.com';
-let USER = null;
-
-async function checkAuth(){
-  const token = localStorage.getItem('biaslens_token');
-  if(!token) return;
-  
-  // Try backend auth first
-  try {
-    const r = await fetch(`${API}/api/auth/me`, {
-      headers: {'Authorization': `Bearer ${token}`},
-      signal: AbortSignal.timeout(3000)
-    });
-    if(r.ok){
-      USER = await r.json();
-      renderUser();
-      return;
-    }
-  } catch(e){ console.log('Backend auth unavailable, trying local token decode'); }
-  
-  // Fallback: decode demo/JWT token client-side
-  try {
-    let payload;
-    if(token.startsWith('demo.')){
-      payload = JSON.parse(atob(token.split('.')[1]));
-    } else {
-      const parts = token.split('.');
-      if(parts.length === 3){
-        payload = JSON.parse(atob(parts[1]));
-      }
-    }
-    if(payload && payload.sub){
-      USER = { email: payload.sub, sub: payload.sub, role: payload.role || 'user' };
-      renderUser();
-    }
-  } catch(e){ 
-    console.error('Token decode failed:', e);
-    localStorage.removeItem('biaslens_token');
-  }
-}
 
 function renderUser(){
   const sec = document.getElementById('userSec');
-  if(!USER) return;
-  const email = USER.email || USER.sub || 'User';
+  if(!window.USER) {
+    if(sec) sec.innerHTML = '<button class="btn-o" style="margin-left:10px;" onclick="location.href=\'auth.html\'">login</button>';
+    return;
+  }
+  const email = window.USER.email || 'User';
   const initial = email.charAt(0).toUpperCase();
-  const admin = USER.role === 'admin' ? '<span class="badge-admin">ADMIN</span>' : '';
+  const admin = window.USER.role === 'admin' ? '<span class="badge-admin">ADMIN</span>' : '';
   sec.innerHTML = `
     <div class="user-profile" onclick="logout()" title="Click to logout">
       <div class="up-ico">${initial}</div>
-      <div class="up-name">${email}</div>
+      <div class="up-name">${email.split('@')[0]}</div>
       ${admin}
     </div>
   `;
@@ -778,13 +742,16 @@ function renderUser(){
 
 function logout(){
   if(confirm('Log out of BiasLens?')){
-    localStorage.removeItem('biaslens_token');
-    location.reload();
+    if (window.firebaseSignOut) {
+      window.firebaseSignOut();
+    } else {
+      location.reload();
+    }
   }
 }
 
 function gatekeeper(type){
-  if(!localStorage.getItem('biaslens_token')){
+  if(!window.USER){
     showToast('⚠️ LOGIN_REQUIRED: Download access is restricted to members.', true);
     setTimeout(()=>location.href='auth.html', 1500);
     return;
@@ -797,11 +764,12 @@ async function exportPDF(){
   if(!D) return;
   showToast('Generating PDF report...');
   try {
+    const token = window.firebaseGetToken ? await window.firebaseGetToken() : '';
     const r = await fetch(`${API}/api/audit/report`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('biaslens_token')}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify(D)
     });
@@ -824,7 +792,6 @@ function exportJSON(){
 }
 
 window.addEventListener('load',()=>{ 
-  checkAuth(); 
   const saved=sessionStorage.getItem('auditResult'); 
   if(saved){
     D=JSON.parse(saved);
@@ -834,6 +801,45 @@ window.addEventListener('load',()=>{
     document.getElementById('noData').style.display='block';
   } 
 });
+</script>
+
+<script type="module">
+  import { auth, onAuthStateChanged, signOut, doc, getDoc, db } from './firebase-config.js';
+  
+  window.USER = null;
+  
+  onAuthStateChanged(auth, async user => {
+    if (user) {
+      window.USER = { 
+        email: user.email, 
+        uid: user.uid, 
+        role: 'user' 
+      };
+      // Try to fetch role from user document
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        if (snap.exists() && snap.data().role) {
+          window.USER.role = snap.data().role;
+        }
+      } catch(e) {}
+      if(window.renderUser) window.renderUser();
+    } else {
+      window.USER = null;
+      if(window.renderUser) window.renderUser();
+    }
+  });
+
+  window.firebaseSignOut = async function() {
+    await signOut(auth);
+    window.location.reload();
+  };
+
+  window.firebaseGetToken = async function() {
+    if (auth.currentUser) {
+      return await auth.currentUser.getIdToken();
+    }
+    return null;
+  };
 </script>
 </body>
 </html>
