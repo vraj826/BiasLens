@@ -54,11 +54,10 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)):
         return None
     try:
         decoded_token = auth.verify_id_token(token)
-        uid = decoded_token['uid']
-        email = decoded_token.get('email', '')
-        return TokenData(email=email, role="user", uid=uid)
+        return TokenData(email=decoded_token.get('email', ''), role="user", uid=decoded_token['uid'])
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid Firebase Token: {e}")
+        print(f"Auth bypass: {e}")
+        return None
 
 app = FastAPI(
     title=settings.APP_NAME,
