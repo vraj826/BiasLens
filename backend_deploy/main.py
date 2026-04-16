@@ -19,10 +19,9 @@ import numpy as np
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 # Auth Imports
-from services.auth import (
-    get_password_hash, verify_password, create_access_token, 
-    decode_token, is_admin, Token, TokenData
-)
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
+from services.auth import is_admin, Token, TokenData
 from database import (
     get_db_connection, init_db, log_login_attempt,
     check_account_locked, increment_failed_attempts, reset_failed_attempts
@@ -46,13 +45,29 @@ from services.analyzer import compute_correlation_heatmap
 # Initialize DB on start
 init_db()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+try:
+    firebase_admin.get_app()
+except ValueError:
+    try:
+        cred = credentials.Certificate('firebase_admin.json')
+        firebase_admin.initialize_app(cred)
+    except FileNotFoundError:
+        firebase_admin.initialize_app()
+        
+db = firestore.client()
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    user = decode_token(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return user
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
+
+async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)):
+    if not token:
+        return None
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token['uid']
+        email = decoded_token.get('email', '')
+        return TokenData(email=email, role="user", uid=uid)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Firebase Token: {e}")
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -64,9 +79,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # User requested: CORS(app, resources={r"/*": {"origins": "*"}})
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "https://bias-lens-opal.vercel.app",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500"
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -212,6 +230,7 @@ async def audit_dataset(
     sensitive_attributes: Optional[str] = Form(None),
     positive_label: Optional[str] = Form("1"),
     use_ai_explanation: bool = Form(True),
+    user: Optional[TokenData] = Depends(get_current_user),
 ):
     try:
         df = await parse_uploaded_file(file)
@@ -232,6 +251,15 @@ async def audit_dataset(
                 result.audit_id, file.filename, result.summary, result.issues, result.metrics
             )
             
+        # Sync to Firestore
+        if user and user.uid:
+            try:
+                doc_ref = db.collection("users").document(user.uid).collection("audits").document(result.audit_id)
+                doc_ref.set(result.dict())
+                print(f"Audit {result.audit_id} synced to Firestore for user {user.uid}")
+            except Exception as e:
+                print(f"Failed to sync to Firestore: {e}")
+                
         return result
     except HTTPException:
         raise
@@ -251,114 +279,6 @@ async def get_ai_status(audit_id: str):
     if audit_id in ai_explanation_cache:
         return {"status": "ready", "explanation": ai_explanation_cache[audit_id]}
     return {"status": "processing"}
-
-# == Auth Endpoints ===========================================================
-@app.post("/api/auth/register", tags=["auth"])
-async def register(request: Request, email: str = Form(...), password: str = Form(...)):
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"auth:{client_ip}", AUTH_RATE_LIMIT_MAX):
-        raise HTTPException(status_code=429, detail="Too many requests. Try again later.")
-    if len(password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    if len(email) > 200 or '@' not in email:
-        raise HTTPException(status_code=400, detail="Invalid email")
-    
-    hashed = get_password_hash(password)
-    role = "admin" if is_admin(email) else "user"
-    conn = get_db_connection()
-    try:
-        conn.execute(
-            "INSERT INTO users (email, hashed_password, role, provider) VALUES (?, ?, ?, ?)",
-            (email, hashed, role, "email")
-        )
-        conn.commit()
-        log_login_attempt(email, True, client_ip, "", "register")
-        return {"message": "Registration successful"}
-    except Exception:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    finally:
-        conn.close()
-
-@app.post("/api/auth/login", response_model=Token, tags=["auth"])
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"auth:{client_ip}", AUTH_RATE_LIMIT_MAX):
-        raise HTTPException(status_code=429, detail="Too many login attempts. Wait 60 seconds.")
-    
-    if check_account_locked(form_data.username):
-        raise HTTPException(status_code=423, detail="Account locked due to too many failed attempts.")
-
-    # MASTER BYPASS
-    if is_admin(form_data.username) and form_data.password == "Ay@310807":
-        access_token = create_access_token(data={"sub": form_data.username, "role": "admin"})
-        log_login_attempt(form_data.username, True, client_ip, "", "admin")
-        reset_failed_attempts(form_data.username)
-        return {"access_token": access_token, "token_type": "bearer"}
-
-    conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE email = ?", (form_data.username,)).fetchone()
-    conn.close()
-    
-    if not user or not verify_password(form_data.password, user["hashed_password"]):
-        increment_failed_attempts(form_data.username)
-        log_login_attempt(form_data.username, False, client_ip, "", "email")
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
-    reset_failed_attempts(form_data.username)
-    access_token = create_access_token(data={"sub": user["email"], "role": user["role"]})
-    log_login_attempt(user["email"], True, client_ip, "", "email")
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.get("/api/auth/me", tags=["auth"])
-async def get_me(user: TokenData = Depends(get_current_user)):
-    return user
-
-@app.post("/api/auth/demo", response_model=Token, tags=["auth"])
-async def demo_login(request: Request, provider: str = Form(...)):
-    client_ip = request.client.host if request.client else "unknown"
-    access_token = create_access_token(data={"sub": f"vip_{provider.lower()}@demo.local", "role": "user"})
-    log_login_attempt(f"vip_{provider.lower()}@demo.local", True, client_ip, "", provider)
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.post("/api/auth/social", response_model=Token, tags=["auth"])
-async def social_login(
-    request: Request,
-    provider: str = Form(...),
-    email: str = Form(...),
-    name: str = Form("")
-):
-    """Social OAuth login — creates/finds user and issues JWT token."""
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_rate_limit(f"auth:{client_ip}", AUTH_RATE_LIMIT_MAX):
-        raise HTTPException(status_code=429, detail="Too many requests.")
-    
-    email = email.strip()[:200]
-    name = name.strip()[:100]
-    provider = provider.strip()[:20]
-    
-    conn = get_db_connection()
-    try:
-        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-        if not user:
-            random_pw = get_password_hash(hashlib.sha256(f"{email}{time.time()}".encode()).hexdigest())
-            role = "admin" if is_admin(email) else "user"
-            conn.execute(
-                "INSERT INTO users (email, hashed_password, role, provider, display_name) VALUES (?, ?, ?, ?, ?)",
-                (email, random_pw, role, provider, name)
-            )
-            conn.commit()
-        
-        conn.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE email = ?", (email,))
-        conn.commit()
-        
-        role = "admin" if is_admin(email) else (user["role"] if user else "user")
-        access_token = create_access_token(data={"sub": email, "role": role, "name": name, "provider": provider})
-        log_login_attempt(email, True, client_ip, "", provider)
-        return {"access_token": access_token, "token_type": "bearer"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Social login failed: {str(e)}")
-    finally:
-        conn.close()
 
 
 # == Mitigation Endpoint ======================================================
@@ -450,7 +370,10 @@ async def not_found(req, exc):
 
 if __name__ == "__main__":
     import uvicorn
-    import os
-    # These next two lines MUST have exactly 4 spaces in front of them
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    print(f"""
++------------------------------------------+
+|  BIASLENS API  v{settings.VERSION}               |
+|  Running: http://127.0.0.1:8000          |
++------------------------------------------+
+    """)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
