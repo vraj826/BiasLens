@@ -310,17 +310,7 @@ window.runAudit = async function(file,labelCol,sensitiveAttrs){
   document.getElementById('upSub').textContent=file.name;
   setStep(0);
 
-  // FIREBASE STORAGE INTEGRATION
-  const currentUser = auth.currentUser;
-  if(currentUser) {
-    try {
-      const storageRef = ref(storage, `users/${currentUser.uid}/uploads/${Date.now()}_${file.name}`);
-      await uploadBytes(storageRef, file);
-      console.log('Dataset securely saved to Firebase Storage.');
-    } catch(err) {
-      console.warn('Firebase Storage upload failed:', err);
-    }
-  }
+
 
   const timings=[0,900,2200,3800,5500];
   timings.forEach((d,i)=>setTimeout(()=>setStep(i),d));
