@@ -9,9 +9,9 @@
 ---
 
 ## 👥 Development Team
-* **🔹 Ayush Bhatnagar** — *Lead Developer / Backend & ML Architect*
-* **🔹 Ansh Singh** — *Frontend & UI/UX Specialist*
-* **🔹 Abhyuday Gautam** — *Data Researcher, Security Analyst and DevOps Engineer*
+* **🔹 Ayush Bhatnagar** — *Lead Developer / Frontend, UI/UX Specialist & Security Analyst*
+* **🔹 Ansh Singh** — *Backend & ML Architect*
+* **🔹 Abhyuday Gautam** — *Data Researcher & DevOps Engineer*
 
 ---
 
